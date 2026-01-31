@@ -5,6 +5,10 @@ import { TrendingUp, TrendingDown, Activity, Settings, Bell, AlertCircle, Databa
 // CHANGE THIS IF USING ALTERNATIVE SERVER
 const API_URL = 'http://localhost:8080/api';  // Changed from 5000 to 8080
 
+//const API_URL = "https://rsi-backend.onrender.com";
+
+//fetch(`${API_URL}/api/rsi`)
+
 function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [symbols, setSymbols] = useState([]);
