@@ -13,6 +13,7 @@ from datetime import datetime
 import os
 
 app = Flask(__name__)
+CORS(app)
 
 # Very permissive CORS - allows all origins
 CORS(app, resources={r"/*": {"origins": "*"}})

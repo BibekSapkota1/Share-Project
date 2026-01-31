@@ -3,11 +3,12 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { TrendingUp, TrendingDown, Activity, Settings, Bell, AlertCircle, Database } from 'lucide-react';
 
 // CHANGE THIS IF USING ALTERNATIVE SERVER
-const API_URL = 'http://localhost:8080/api';  // Changed from 5000 to 8080
+//const API_URL = 'http://localhost:8080/api';  // Changed from 5000 to 8080
 
-//const API_URL = "https://rsi-backend.onrender.com";
+const API_URL = "https://analysisproject.onrender.com/api";
 
-//fetch(`${API_URL}/api/rsi`)
+fetch(`${API_URL}/symbols`)
+
 
 function App() {
   const [activeTab, setActiveTab] = useState('home');
@@ -53,8 +54,12 @@ function App() {
       }
     } catch (error) {
       console.error('Error fetching symbols:', error);
+      // showNotificationMessage(
+      //   `Cannot connect to backend. Make sure it's running on port ${API_URL.includes('8080') ? '8080' : '5000'}`,
+      //   'error'
+      // );
       showNotificationMessage(
-        `Cannot connect to backend. Make sure it's running on port ${API_URL.includes('8080') ? '8080' : '5000'}`,
+        `Cannot connect to backend at ${API_URL}`,
         'error'
       );
     }
