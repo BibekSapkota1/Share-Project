@@ -4,7 +4,9 @@ Features:
 - User Authentication (Email/Password)
 - User-specific data isolation
 - Market Scanner with TSL logic
+- Turnover filtering (top 15 for 2 consecutive days)
 - Trade Cycle Tracking with 5% TSL
+- Manual sell with reason tracking
 - Auto-sell when price drops below TSL OR RSI < lower threshold
 """
 
@@ -12,7 +14,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import psycopg2
 from psycopg2 import pool
@@ -31,13 +33,9 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 app.config['DEBUG'] = True
 app.config['ENV'] = 'development'
 
-# Paths
 DATA_FILE = os.path.join(os.path.dirname(__file__), 'data', 'data_sample.csv')
-
-# JWT Secret Key
 JWT_SECRET = os.getenv('JWT_SECRET_KEY', 'your-super-secret-key-change-this-in-production')
 
-# Database Configuration
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
     'port': os.getenv('DB_PORT', '5432'),
@@ -46,11 +44,9 @@ DB_CONFIG = {
     'password': os.getenv('DB_PASSWORD', 'your_password_here')
 }
 
-# Connection pool
 connection_pool = None
 
 def init_connection_pool():
-    """Initialize PostgreSQL connection pool"""
     global connection_pool
     try:
         connection_pool = psycopg2.pool.SimpleConnectionPool(1, 20, **DB_CONFIG)
@@ -63,7 +59,6 @@ def init_connection_pool():
 
 @contextmanager
 def get_db():
-    """Context manager for database connections"""
     conn = None
     try:
         conn = connection_pool.getconn()
@@ -85,16 +80,12 @@ def get_db():
 # ============================================================================
 
 def hash_password(password):
-    """Hash password using bcrypt"""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 def verify_password(password, password_hash):
-    """Verify password against hash"""
     return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
 
 def create_token(user_id, email):
-    """Create JWT token"""
-    from datetime import timedelta
     payload = {
         'user_id': user_id,
         'email': email,
@@ -103,98 +94,98 @@ def create_token(user_id, email):
     return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
 
 def verify_token(token):
-    """Verify JWT token and return user_id"""
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
         return payload['user_id']
     except:
         return None
 
-# def token_required(f):
-#     """Decorator to require authentication"""
-#     @wraps(f)
-#     def decorated(*args, **kwargs):
-#         token = request.headers.get('Authorization')
-        
-#         if not token:
-#             return jsonify({'error': 'Token is missing'}), 401
-        
-#         user_id = verify_token(token)
-#         if not user_id:
-#             return jsonify({'error': 'Token is invalid'}), 401
-        
-#         return f(user_id, *args, **kwargs)
-    
-#     return decorated
-
 def token_required(f):
-    """Decorator to require authentication, but skip OPTIONS (CORS preflight)"""
     @wraps(f)
     def decorated(*args, **kwargs):
-        # Skip token check for OPTIONS requests
         if request.method == 'OPTIONS':
             return '', 204
-
         auth_header = request.headers.get('Authorization')
         if not auth_header:
             return jsonify({'error': 'Token is missing'}), 401
-
-        # Remove "Bearer " prefix if present
         token = auth_header.split(" ")[1] if " " in auth_header else auth_header
-
         user_id = verify_token(token)
         if not user_id:
             return jsonify({'error': 'Token is invalid'}), 401
-
         return f(user_id, *args, **kwargs)
-
     return decorated
-
-
-
 
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
 
 def clean_numeric_value(value):
-    """Clean numeric values that may have commas"""
     if isinstance(value, str):
         return float(value.replace(',', ''))
     return float(value)
 
 def calculate_rsi(prices, period=14):
-    """Calculate RSI using Wilder's smoothing method"""
     if len(prices) < period + 1:
         return pd.Series([np.nan] * len(prices), index=prices.index)
-    
     delta = prices.diff()
     gains = delta.where(delta > 0, 0)
     losses = -delta.where(delta < 0, 0)
-    
     avg_gain = gains.rolling(window=period, min_periods=period).mean()
     avg_loss = losses.rolling(window=period, min_periods=period).mean()
-    
     avg_gain = avg_gain.copy()
     avg_loss = avg_loss.copy()
-    
     if len(gains) > period:
         for i in range(period, len(gains)):
             if pd.notna(avg_gain.iloc[i-1]) and pd.notna(avg_loss.iloc[i-1]):
                 avg_gain.iloc[i] = (avg_gain.iloc[i-1] * (period - 1) + gains.iloc[i]) / period
                 avg_loss.iloc[i] = (avg_loss.iloc[i-1] * (period - 1) + losses.iloc[i]) / period
-    
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-    
     return rsi
+
+def get_top_turnover_symbols(df, date, top_n=15):
+    date_data = df[df['Date'] == date].copy()
+    if 'Turnover' in date_data.columns:
+        date_data['calculated_turnover'] = date_data['Turnover'].apply(clean_numeric_value)
+    else:
+        date_data['calculated_turnover'] = (
+            date_data['Volume'].apply(clean_numeric_value) * 
+            date_data['Close'].apply(clean_numeric_value)
+        )
+    top_symbols = date_data.nlargest(top_n, 'calculated_turnover')['Symbol'].tolist()
+    return set(top_symbols)
+
+def check_turnover_eligibility(symbol, date_str):
+    try:
+        df = pd.read_csv(DATA_FILE)
+        df['Symbol'] = df['Symbol'].astype(str).str.strip()
+        df = df[df['Symbol'].notna() & (df['Symbol'] != 'nan') & (df['Symbol'] != '')]
+        df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
+        df = df.dropna(subset=['Date'])
+        df = df.sort_values('Date')
+        current_date = pd.to_datetime(date_str, format='%Y-%m-%d')
+        unique_dates = sorted(df['Date'].unique())
+        current_date_idx = None
+        for idx, d in enumerate(unique_dates):
+            if d == current_date:
+                current_date_idx = idx
+                break
+        if current_date_idx is None or current_date_idx < 2:
+            return False
+        day_1 = unique_dates[current_date_idx - 1]
+        day_2 = unique_dates[current_date_idx - 2]
+        top_day_1 = get_top_turnover_symbols(df, day_1, 15)
+        top_day_2 = get_top_turnover_symbols(df, day_2, 15)
+        return symbol in top_day_1 and symbol in top_day_2
+    except Exception as e:
+        print(f"Error checking turnover eligibility for {symbol}: {e}")
+        return False
 
 # ============================================================================
 # DATABASE FUNCTIONS
 # ============================================================================
 
 def get_next_cycle_number(user_id, symbol):
-    """Get the next cycle number for a user's symbol"""
     with get_db() as cursor:
         cursor.execute('''
             SELECT MAX(cycle_number) as max_cycle 
@@ -205,7 +196,6 @@ def get_next_cycle_number(user_id, symbol):
         return (result['max_cycle'] or 0) + 1
 
 def get_open_cycle(user_id, symbol):
-    """Get the currently open cycle for a user's symbol"""
     with get_db() as cursor:
         cursor.execute('''
             SELECT * FROM trade_cycles 
@@ -217,9 +207,7 @@ def get_open_cycle(user_id, symbol):
         return dict(result) if result else None
 
 def create_buy_cycle(user_id, symbol, date, price, rsi):
-    """Create a new BUY cycle"""
     cycle_number = get_next_cycle_number(user_id, symbol)
-    
     with get_db() as cursor:
         cursor.execute('''
             INSERT INTO trade_cycles (
@@ -228,19 +216,14 @@ def create_buy_cycle(user_id, symbol, date, price, rsi):
             ) VALUES (%s, %s, %s, 'OPEN', %s, %s, %s, %s, %s)
             RETURNING id
         ''', (user_id, symbol, cycle_number, date, price, rsi, price, price * 0.95))
-        
         cycle_id = cursor.fetchone()['id']
-        
-        # Record initial price tracking
         cursor.execute('''
             INSERT INTO price_tracking (cycle_id, date, close_price, tsl_price, is_new_high)
             VALUES (%s, %s, %s, %s, %s)
         ''', (cycle_id, date, price, price * 0.95, True))
-        
         return cycle_number
 
 def update_tsl(cycle_id, date, current_price):
-    """Update trailing stop loss if new high is reached"""
     with get_db() as cursor:
         cursor.execute('''
             SELECT highest_price_after_buy, tsl_trigger_price 
@@ -248,16 +231,13 @@ def update_tsl(cycle_id, date, current_price):
             WHERE id = %s
         ''', (cycle_id,))
         result = cursor.fetchone()
-        
         highest_price = float(result['highest_price_after_buy'])
         current_tsl = float(result['tsl_trigger_price'])
-        
         is_new_high = False
         if current_price > highest_price:
             highest_price = current_price
             current_tsl = current_price * 0.95
             is_new_high = True
-            
             cursor.execute('''
                 UPDATE trade_cycles 
                 SET highest_price_after_buy = %s, 
@@ -265,27 +245,19 @@ def update_tsl(cycle_id, date, current_price):
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
             ''', (highest_price, current_tsl, cycle_id))
-        
-        # Record price tracking
         cursor.execute('''
             INSERT INTO price_tracking (cycle_id, date, close_price, tsl_price, is_new_high)
             VALUES (%s, %s, %s, %s, %s)
         ''', (cycle_id, date, current_price, current_tsl, is_new_high))
-        
         return current_tsl, is_new_high
 
-def close_cycle(cycle_id, date, price, rsi, reason='SIGNAL'):
-    """Close an open cycle"""
+def close_cycle(cycle_id, date, price, rsi, reason='AUTOMATIC'):
     with get_db() as cursor:
-        cursor.execute('''
-            SELECT buy_price FROM trade_cycles WHERE id = %s
-        ''', (cycle_id,))
+        cursor.execute('SELECT buy_price FROM trade_cycles WHERE id = %s', (cycle_id,))
         result = cursor.fetchone()
         buy_price = float(result['buy_price'])
-        
         profit_loss = price - buy_price
         profit_loss_percent = ((price - buy_price) / buy_price) * 100
-        
         cursor.execute('''
             UPDATE trade_cycles 
             SET status = 'CLOSED',
@@ -298,93 +270,68 @@ def close_cycle(cycle_id, date, price, rsi, reason='SIGNAL'):
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
         ''', (date, price, rsi, profit_loss, profit_loss_percent, reason, cycle_id))
-        
         return profit_loss, profit_loss_percent
 
 def scan_all_symbols(user_id, upper_threshold=70, lower_threshold=30, rsi_period=14):
-    """Scan all symbols and return current signals with TSL check"""
     if not os.path.exists(DATA_FILE):
         return []
-    
-    # df = pd.read_csv(DATA_FILE)
-    # symbols = df['Symbol'].unique()
     df = pd.read_csv(DATA_FILE)
-
     df['Symbol'] = df['Symbol'].astype(str).str.strip()
     df = df[df['Symbol'].notna()]
     df = df[df['Symbol'] != 'nan']
     df = df[df['Symbol'] != '']
-
     symbols = df['Symbol'].unique()
-    
     results = []
-    
     for symbol in symbols:
         try:
             symbol_df = df[df['Symbol'] == symbol].copy()
-            
             if len(symbol_df) < rsi_period + 1:
                 continue
-            
             symbol_df['Date'] = pd.to_datetime(symbol_df['Date'], format='%d/%m/%Y', errors='coerce')
             symbol_df = symbol_df.dropna(subset=['Date'])
             symbol_df = symbol_df.sort_values('Date').reset_index(drop=True)
-            
             for col in ['Open', 'High', 'Low', 'Close']:
                 if col in symbol_df.columns:
                     symbol_df[col] = symbol_df[col].apply(clean_numeric_value)
-            
             symbol_df['RSI'] = calculate_rsi(symbol_df['Close'], period=rsi_period)
-            
             if symbol_df['RSI'].isna().all():
                 continue
-            
             latest = symbol_df.iloc[-1]
             latest_rsi = float(latest['RSI']) if not pd.isna(latest['RSI']) else None
-            
             if latest_rsi is None:
                 continue
-                
             current_price = float(latest['Close'])
             current_date = latest['Date'].strftime('%Y-%m-%d')
-            
         except Exception as e:
             print(f"Error processing symbol {symbol}: {e}")
             continue
         
-        # Get open cycle for this user
         open_cycle = get_open_cycle(user_id, symbol)
         
-        # Determine signal based on open cycle status
         if open_cycle:
             tsl_price = float(open_cycle['tsl_trigger_price'])
-            
-            # Check for SELL conditions: RSI < lower OR price < TSL
             rsi_sell = latest_rsi < lower_threshold
             tsl_sell = current_price < tsl_price
-            
             if rsi_sell or tsl_sell:
                 signal = 'SELL'
                 signal_class = 'sell'
                 sell_reason = 'RSI' if rsi_sell else 'TSL'
             else:
-                # Update TSL if price increased
                 if current_price > float(open_cycle['highest_price_after_buy']):
                     update_tsl(open_cycle['id'], current_date, current_price)
-                    # Refresh cycle data
                     open_cycle = get_open_cycle(user_id, symbol)
-                
                 signal = 'HOLD'
                 signal_class = 'neutral'
                 sell_reason = None
         else:
-            # No open cycle - check for BUY signal
             if latest_rsi > upper_threshold:
-                signal = 'BUY'
-                signal_class = 'buy'
-            elif latest_rsi < lower_threshold:
-                signal = 'SELL'  # Can show as opportunity but can't execute without cycle
-                signal_class = 'sell'
+                can_buy = check_turnover_eligibility(symbol, current_date)
+                if can_buy:
+                    signal = 'BUY'
+                    signal_class = 'buy'
+                else:
+                    signal = 'NEUTRAL'
+                    signal_class = 'neutral'
             else:
                 signal = 'NEUTRAL'
                 signal_class = 'neutral'
@@ -408,7 +355,6 @@ def scan_all_symbols(user_id, upper_threshold=70, lower_threshold=30, rsi_period
                 'unrealized_pnl': round(((current_price - float(open_cycle['buy_price'])) / float(open_cycle['buy_price'])) * 100, 2)
             } if open_cycle else None
         })
-    
     return results
 
 # ============================================================================
@@ -417,38 +363,28 @@ def scan_all_symbols(user_id, upper_threshold=70, lower_threshold=30, rsi_period
 
 @app.route('/api/auth/signup', methods=['POST'])
 def signup():
-    """Create new user account"""
     try:
         data = request.json
         email = data.get('email')
         password = data.get('password')
-        
         if not email or not password:
             return jsonify({'error': 'Email and password are required'}), 400
-        
-        # Validate email format
         if '@' not in email:
             return jsonify({'error': 'Invalid email format'}), 400
-        
-        # Check if user already exists
+        if len(password) < 6:
+            return jsonify({'error': 'Password must be at least 6 characters long'}), 400
         with get_db() as cursor:
             cursor.execute('SELECT id FROM users WHERE email = %s', (email,))
             if cursor.fetchone():
                 return jsonify({'error': 'Email already registered'}), 400
-            
-            # Create user
             password_hash = hash_password(password)
             cursor.execute('''
                 INSERT INTO users (email, password_hash)
                 VALUES (%s, %s)
                 RETURNING id, email, created_at
             ''', (email, password_hash))
-            
             user = cursor.fetchone()
-            
-            # Create token
             token = create_token(user['id'], user['email'])
-            
             return jsonify({
                 'success': True,
                 'token': token,
@@ -458,51 +394,31 @@ def signup():
                     'created_at': user['created_at'].isoformat()
                 }
             })
-    
     except Exception as e:
         import traceback
-        return jsonify({
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }), 500
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    """Login user"""
     try:
         data = request.json
         email = data.get('email')
         password = data.get('password')
-        
         if not email or not password:
             return jsonify({'error': 'Email and password are required'}), 400
-        
         with get_db() as cursor:
             cursor.execute('''
                 SELECT id, email, password_hash, created_at
                 FROM users 
                 WHERE email = %s AND is_active = TRUE
             ''', (email,))
-            
             user = cursor.fetchone()
-            
             if not user:
                 return jsonify({'error': 'Invalid email or password'}), 401
-            
-            # Verify password
             if not verify_password(password, user['password_hash']):
                 return jsonify({'error': 'Invalid email or password'}), 401
-            
-            # Update last login
-            cursor.execute('''
-                UPDATE users 
-                SET last_login = CURRENT_TIMESTAMP 
-                WHERE id = %s
-            ''', (user['id'],))
-            
-            # Create token
+            cursor.execute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = %s', (user['id'],))
             token = create_token(user['id'], user['email'])
-            
             return jsonify({
                 'success': True,
                 'token': token,
@@ -512,40 +428,28 @@ def login():
                     'created_at': user['created_at'].isoformat()
                 }
             })
-    
     except Exception as e:
         import traceback
-        return jsonify({
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }), 500
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 @app.route('/api/auth/verify', methods=['GET'])
 def verify():
-    """Verify token and return user info"""
     try:
         token = request.headers.get('Authorization')
-        
         if not token:
             return jsonify({'error': 'Token is missing'}), 401
-        
         user_id = verify_token(token)
-        
         if not user_id:
             return jsonify({'error': 'Token is invalid'}), 401
-        
         with get_db() as cursor:
             cursor.execute('''
                 SELECT id, email, created_at, last_login
                 FROM users 
                 WHERE id = %s AND is_active = TRUE
             ''', (user_id,))
-            
             user = cursor.fetchone()
-            
             if not user:
                 return jsonify({'error': 'User not found'}), 404
-            
             return jsonify({
                 'success': True,
                 'user': {
@@ -555,91 +459,44 @@ def verify():
                     'last_login': user['last_login'].isoformat() if user['last_login'] else None
                 }
             })
-    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# ============================================================================
-# API ROUTES - PROTECTED (Require Authentication)
-# ============================================================================
-
+# MAIN ROUTES
 @app.route('/', methods=['GET'])
 def home():
-    """Root endpoint"""
     return jsonify({
-        'app': 'Stock Market Analyzer API with User Authentication',
+        'app': 'Stock Market Analyzer API v8.0',
         'status': 'running',
-        'version': '6.0',
-        'database': 'PostgreSQL',
         'features': [
-            'User Authentication (Email/Password)',
-            'User-specific data isolation',
-            'Market Scanner with TSL logic',
-            'Trade Cycle Tracking with 5% TSL',
-            'Auto-sell: RSI < lower OR price < TSL'
-        ],
-        'endpoints': {
-            'signup': '/api/auth/signup (POST)',
-            'login': '/api/auth/login (POST)',
-            'verify': '/api/auth/verify (GET)',
-            'scanner': '/api/scanner (GET - Auth Required)',
-            'symbols': '/api/symbols (GET)',
-            'analyze': '/api/analyze (POST - Auth Required)',
-            'cycles': '/api/cycles (GET - Auth Required)',
-            'trade': '/api/trade (POST - Auth Required)'
-        }
-    })
-
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    db_connected = False
-    try:
-        with get_db() as cursor:
-            cursor.execute('SELECT 1')
-            db_connected = True
-    except:
-        pass
-    
-    return jsonify({
-        'status': 'ok' if db_connected else 'degraded',
-        'timestamp': datetime.now().isoformat(),
-        'data_file_exists': os.path.exists(DATA_FILE),
-        'database_connected': db_connected
+            'BUY only if top 15 turnover for 2 consecutive days',
+            'SELL only if user has open cycle',
+            'Manual sell with REQUIRED custom reason (shown in red)',
+            'Automatic sell reason: AUTOMATIC',
+        ]
     })
 
 @app.route('/api/scanner', methods=['GET'])
 @token_required
 def market_scanner(user_id):
-    """Scan all symbols and return current signals (user-specific)"""
     try:
-        # Get user settings or use defaults
         with get_db() as cursor:
-            cursor.execute('''
-                SELECT key, value FROM user_settings WHERE user_id = %s
-            ''', (user_id,))
+            cursor.execute('SELECT key, value FROM user_settings WHERE user_id = %s', (user_id,))
             user_settings = {row['key']: int(row['value']) for row in cursor.fetchall()}
-        
-        # Fall back to global settings
         if not user_settings:
             with get_db() as cursor:
                 cursor.execute('SELECT key, value FROM global_settings')
                 user_settings = {row['key']: int(row['value']) for row in cursor.fetchall()}
-        
         rsi_period = user_settings.get('default_rsi_period', 14)
         upper_threshold = user_settings.get('default_upper_threshold', 70)
         lower_threshold = user_settings.get('default_lower_threshold', 30)
-        
         results = scan_all_symbols(user_id, upper_threshold, lower_threshold, rsi_period)
-        
-        # Calculate summary statistics
         total = len(results)
         buy_signals = len([r for r in results if r['signal'] == 'BUY'])
         sell_signals = len([r for r in results if r['signal'] == 'SELL'])
         hold_signals = len([r for r in results if r['signal'] == 'HOLD'])
         neutral_signals = len([r for r in results if r['signal'] == 'NEUTRAL'])
         open_positions = len([r for r in results if r['has_open_cycle']])
-        
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'symbols': results,
@@ -657,90 +514,60 @@ def market_scanner(user_id):
                 'lower_threshold': lower_threshold
             }
         })
-    
     except Exception as e:
         import traceback
-        return jsonify({
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }), 500
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 @app.route('/api/symbols', methods=['GET'])
 def get_symbols():
-    """Get list of available symbols (public endpoint)"""
     try:
         if not os.path.exists(DATA_FILE):
-            return jsonify({'error': f'Data file not found'}), 404
-        
-        # df = pd.read_csv(DATA_FILE)
-        # symbols = sorted(df['Symbol'].unique().tolist())
+            return jsonify({'error': 'Data file not found'}), 404
         df = pd.read_csv(DATA_FILE)
         df['Symbol'] = df['Symbol'].astype(str).str.strip()
         df = df[df['Symbol'].notna()]
         df = df[df['Symbol'] != 'nan']
         df = df[df['Symbol'] != '']
-
         symbols = sorted(df['Symbol'].unique().tolist())
-
-        
-        return jsonify({
-            'symbols': symbols,
-            'total': len(symbols)
-        })
-    
+        return jsonify({'symbols': symbols, 'total': len(symbols)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/analyze', methods=['POST', 'OPTIONS'])
 @token_required
 def analyze_data(user_id):
-    """Analyze specific symbol with RSI"""
     if request.method == 'OPTIONS':
         return '', 204
-    
     try:
         data = request.json
         symbol = data.get('symbol')
         rsi_period = data.get('rsi_period', 14)
         upper_threshold = data.get('upper_threshold', 70)
         lower_threshold = data.get('lower_threshold', 30)
-        
         if not symbol:
             return jsonify({'error': 'Symbol is required'}), 400
-        
         if not os.path.exists(DATA_FILE):
             return jsonify({'error': 'Data file not found'}), 404
-        
         df = pd.read_csv(DATA_FILE)
         df = df[df['Symbol'] == symbol].copy()
-        
         if df.empty:
             return jsonify({'error': f'No data found for symbol {symbol}'}), 404
-        
         if len(df) < rsi_period + 1:
             return jsonify({'error': f'Not enough data for {symbol}'}), 400
-        
         df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
         df = df.dropna(subset=['Date'])
         df = df.sort_values('Date').reset_index(drop=True)
-        
         if df.empty:
             return jsonify({'error': f'Invalid date data for symbol {symbol}'}), 400
-        
         for col in ['Open', 'High', 'Low', 'Close']:
             df[col] = df[col].apply(clean_numeric_value)
-        
         df['RSI'] = calculate_rsi(df['Close'], period=rsi_period)
-        
-        # Generate signals
         signals = []
         for i in range(1, len(df)):
             prev_rsi = df['RSI'].iloc[i-1]
             curr_rsi = df['RSI'].iloc[i]
-            
             if pd.isna(prev_rsi) or pd.isna(curr_rsi):
                 continue
-            
             if prev_rsi <= upper_threshold and curr_rsi > upper_threshold:
                 signals.append({
                     'date': df['Date'].iloc[i].strftime('%Y-%m-%d'),
@@ -749,7 +576,6 @@ def analyze_data(user_id):
                     'rsi': float(curr_rsi),
                     'message': f'RSI crossed above {upper_threshold} - Strong momentum'
                 })
-            
             elif prev_rsi >= lower_threshold and curr_rsi < lower_threshold:
                 signals.append({
                     'date': df['Date'].iloc[i].strftime('%Y-%m-%d'),
@@ -758,7 +584,6 @@ def analyze_data(user_id):
                     'rsi': float(curr_rsi),
                     'message': f'RSI crossed below {lower_threshold} - Weak momentum'
                 })
-        
         chart_data = []
         for _, row in df.iterrows():
             chart_data.append({
@@ -766,30 +591,25 @@ def analyze_data(user_id):
                 'close': float(row['Close']),
                 'rsi': float(row['RSI']) if not pd.isna(row['RSI']) else None
             })
-        
         latest_rsi = float(df['RSI'].iloc[-1]) if not pd.isna(df['RSI'].iloc[-1]) else None
-        
         latest_signal = None
         if latest_rsi:
             if latest_rsi > upper_threshold:
                 latest_signal = {
                     'type': 'OVERBOUGHT',
-                    'message': f'RSI is {latest_rsi:.2f} - Strong momentum, consider buying'
+                    'message': f'RSI is {latest_rsi:.2f} - Strong momentum'
                 }
             elif latest_rsi < lower_threshold:
                 latest_signal = {
                     'type': 'OVERSOLD',
-                    'message': f'RSI is {latest_rsi:.2f} - Weak momentum, consider selling'
+                    'message': f'RSI is {latest_rsi:.2f} - Weak momentum'
                 }
             else:
                 latest_signal = {
                     'type': 'NEUTRAL',
                     'message': f'RSI is {latest_rsi:.2f} - No clear signal'
                 }
-        
-        # Get open cycle for this user
         open_cycle = get_open_cycle(user_id, symbol)
-        
         return jsonify({
             'symbol': symbol,
             'chart_data': chart_data,
@@ -809,19 +629,14 @@ def analyze_data(user_id):
             },
             'open_cycle': open_cycle
         })
-    
     except Exception as e:
         import traceback
-        return jsonify({
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }), 500
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 @app.route('/api/cycles', methods=['GET'])
 @app.route('/api/cycles/<symbol>', methods=['GET'])
 @token_required
 def get_cycles(user_id, symbol=None):
-    """Get trade cycles for user"""
     try:
         with get_db() as cursor:
             if symbol:
@@ -836,7 +651,6 @@ def get_cycles(user_id, symbol=None):
                     WHERE user_id = %s
                     ORDER BY symbol, cycle_number DESC
                 ''', (user_id,))
-            
             cycles = []
             for row in cursor.fetchall():
                 cycle = dict(row)
@@ -844,25 +658,16 @@ def get_cycles(user_id, symbol=None):
                     if hasattr(value, '__float__'):
                         cycle[key] = float(value)
                     elif isinstance(value, datetime):
-                        cycle[key] = value.isoformat()
+                        cycle[key] = value.isoformat() if value.year > 1 else None
                 cycles.append(cycle)
-            
-            return jsonify({
-                'cycles': cycles,
-                'total': len(cycles)
-            })
-    
+            return jsonify({'cycles': cycles, 'total': len(cycles)})
     except Exception as e:
         import traceback
-        return jsonify({
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }), 500
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 @app.route('/api/trade', methods=['POST'])
 @token_required
 def execute_trade(user_id):
-    """Execute a BUY or SELL trade"""
     try:
         data = request.json
         symbol = data.get('symbol')
@@ -870,39 +675,29 @@ def execute_trade(user_id):
         date = data.get('date')
         price = data.get('price')
         rsi = data.get('rsi')
-        
         if not all([symbol, action, date, price, rsi]):
             return jsonify({'error': 'Missing required fields'}), 400
-        
         if action == 'BUY':
             open_cycle = get_open_cycle(user_id, symbol)
             if open_cycle:
-                return jsonify({
-                    'error': f'Cycle {open_cycle["cycle_number"]} is still open'
-                }), 400
-            
+                return jsonify({'error': f'Cycle {open_cycle["cycle_number"]} is still open'}), 400
+            if not check_turnover_eligibility(symbol, date):
+                return jsonify({'error': f'{symbol} is not in top 15 turnover for 2 consecutive days'}), 400
             cycle_number = create_buy_cycle(user_id, symbol, date, price, rsi)
-            
             return jsonify({
                 'success': True,
                 'action': 'BUY',
                 'cycle_number': cycle_number,
                 'message': f'Opened Cycle {cycle_number} for {symbol}'
             })
-        
         elif action == 'SELL':
             open_cycle = get_open_cycle(user_id, symbol)
             if not open_cycle:
                 return jsonify({'error': 'No open cycle to close'}), 400
-            
-            # Determine sell reason
-            tsl_price = float(open_cycle['tsl_trigger_price'])
-            sell_reason = 'TSL' if price < tsl_price else 'RSI'
-            
+            sell_reason = 'AUTOMATIC'
             profit_loss, profit_loss_percent = close_cycle(
                 open_cycle['id'], date, price, rsi, sell_reason
             )
-            
             return jsonify({
                 'success': True,
                 'action': 'SELL',
@@ -910,18 +705,46 @@ def execute_trade(user_id):
                 'sell_reason': sell_reason,
                 'profit_loss': round(profit_loss, 2),
                 'profit_loss_percent': round(profit_loss_percent, 2),
-                'message': f'Closed Cycle {open_cycle["cycle_number"]} - {sell_reason} triggered'
+                'message': f'Closed Cycle {open_cycle["cycle_number"]} - Automatic sell'
             })
-        
         else:
             return jsonify({'error': 'Invalid action'}), 400
-    
     except Exception as e:
         import traceback
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+@app.route('/api/trade/manual-sell', methods=['POST'])
+@token_required
+def manual_sell(user_id):
+    try:
+        data = request.json
+        symbol = data.get('symbol')
+        date = data.get('date')
+        price = data.get('price')
+        rsi = data.get('rsi')
+        reason = data.get('reason', '').strip()
+        if not reason:
+            return jsonify({'error': 'Sell reason is REQUIRED for manual sell'}), 400
+        if not all([symbol, date, price, rsi]):
+            return jsonify({'error': 'Missing required fields'}), 400
+        open_cycle = get_open_cycle(user_id, symbol)
+        if not open_cycle:
+            return jsonify({'error': 'No open cycle to close'}), 400
+        profit_loss, profit_loss_percent = close_cycle(
+            open_cycle['id'], date, price, rsi, reason
+        )
         return jsonify({
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }), 500
+            'success': True,
+            'action': 'MANUAL_SELL',
+            'cycle_number': open_cycle['cycle_number'],
+            'reason': reason,
+            'profit_loss': round(profit_loss, 2),
+            'profit_loss_percent': round(profit_loss_percent, 2),
+            'message': f'Manually closed Cycle {open_cycle["cycle_number"]} for {symbol}'
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 # ============================================================================
 # MAIN
@@ -929,46 +752,16 @@ def execute_trade(user_id):
 
 if __name__ == '__main__':
     print("\n" + "="*80)
-    print("🚀 Stock Market Analyzer API - v6.0 (With Authentication)")
+    print("🚀 Stock Market Analyzer API - v8.0 (Complete)")
     print("="*80)
-    
-    print("\n📊 Database Configuration:")
-    print(f"   Host: {DB_CONFIG['host']}")
-    print(f"   Port: {DB_CONFIG['port']}")
-    print(f"   Database: {DB_CONFIG['database']}")
-    print(f"   User: {DB_CONFIG['user']}")
-    
-    print("\n🔌 Connecting to PostgreSQL...")
-    if not init_connection_pool():
-        print("\n❌ Failed to connect. Run create_database.py first!")
-        exit(1)
-    
-    print("\n📁 Data File:", DATA_FILE)
-    print("   Exists:", os.path.exists(DATA_FILE))
-    
-    if os.path.exists(DATA_FILE):
-        try:
-            df = pd.read_csv(DATA_FILE)
-            symbols = df['Symbol'].unique()
-            print(f"\n📈 Symbols found: {list(symbols)}")
-        except Exception as e:
-            print(f"\n❌ Error reading file: {e}")
-    
     print("\n✨ Features:")
-    print("   1. User Authentication (JWT)")
-    print("   2. User-specific data isolation")
-    print("   3. Market Scanner with TSL logic")
-    print("   4. Auto-sell: RSI < lower OR price < TSL")
-    print("   5. Trade Cycle Tracking")
-    
-    print("\n🌐 Server available at: http://localhost:8080")
-    print("\n⚠️  Press CTRL+C to stop")
+    print("   - BUY only if top 15 turnover for 2 consecutive days")
+    print("   - SELL only shown if user has open cycle")
+    print("   - Manual sell requires custom reason (shown in red)")
+    print("   - Automatic sell reason: AUTOMATIC (not TSL or RSI)")
+    print("\n🌐 Server: http://localhost:8080")
     print("="*80 + "\n")
-    
-    app.run(
-        host='0.0.0.0',
-        port=8080,
-        debug=True,
-        use_reloader=False,
-        threaded=True
-    )
+    if not init_connection_pool():
+        print("❌ Failed to connect to database!")
+        exit(1)
+    app.run(host='0.0.0.0', port=8080, debug=True, use_reloader=False, threaded=True)
