@@ -36,14 +36,24 @@ app.config['ENV'] = 'development'
 DATA_FILE = os.path.join(os.path.dirname(__file__), 'data', 'data_sample.csv')
 JWT_SECRET = os.getenv('JWT_SECRET_KEY', 'your-super-secret-key-change-this-in-production')
 
+# DB_CONFIG = {
+#     'host': os.getenv('DB_HOST', 'localhost'),
+#     'port': os.getenv('DB_PORT', '5432'),
+#     'database': os.getenv('DB_NAME', 'trading_db'),
+#     'user': os.getenv('DB_USER', 'postgres'),
+#     'password': os.getenv('DB_PASSWORD', 'your_password_here'),
+#     'sslmode': 'require'
+# }
+
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'port': os.getenv('DB_PORT', '5432'),
-    'database': os.getenv('DB_NAME', 'trading_db'),
-    'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', 'your_password_here'),
+    'host': 'aws-1-ap-south-1.pooler.supabase.com',
+    'port': '6543',
+    'database': 'postgres',
+    'user': 'postgres.kwwwmblzzugunwxirdbr',
+    'password': 'sS5QKVH92uJkT3vg',
     'sslmode': 'require'
 }
+
 
 connection_pool = None
 

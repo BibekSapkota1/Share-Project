@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { TrendingUp, TrendingDown, Activity, Settings, Bell, AlertCircle, Database, Search, BarChart3, History, LogOut, User, X, AlertTriangle } from 'lucide-react';
 
-//const API_URL = 'http://localhost:8080/api';
+const API_URL = 'http://localhost:8080/api';
 
-const API_URL = 'https://analysisproject.onrender.com/api';
+//const API_URL = 'https://analysisproject.onrender.com/api';
 
 function App() {
   // Auth state
@@ -76,23 +76,28 @@ function App() {
 
   const verifyToken = async (token) => {
     try {
-      const response = await fetch(`${API_URL}/auth/verify`, {
-        headers: { 
-          'Authorization': `Bearer ${token}` // <-- Add "Bearer "
-        }
+      const response = await fetch(`${API_URL}/api/auth/verify`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
       });
-  
+      
       if (response.ok) {
         const data = await response.json();
         setUser(data.user);
         setIsAuthenticated(true);
       } else {
         localStorage.removeItem('token');
+        setIsAuthenticated(false);
       }
     } catch (error) {
       localStorage.removeItem('token');
+      setIsAuthenticated(false);
     }
   };
+  
   
 
   const handleAuth = async (e) => {
