@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { TrendingUp, TrendingDown, Activity, Settings, Bell, AlertCircle, Database, Search, BarChart3, History, LogOut, User, X, AlertTriangle } from 'lucide-react';
 
-const API_URL = 'http://localhost:8080/api';
+// const API_URL = 'http://localhost:8080/api';
+
+const API_URL = 'https://analysisproject.onrender.com';
 
 function App() {
   // Auth state
