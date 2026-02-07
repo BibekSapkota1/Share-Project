@@ -2,6 +2,7 @@
 # Database Creation and Initialization Script
 # Run this separately to create/update database schema
 # """
+# all okay
 
 # import psycopg2
 # from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
