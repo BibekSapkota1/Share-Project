@@ -1,75 +1,34 @@
-# # # {/* <div className="user-section">
-# # #             <div className="user-info">
-# # #               <User size={18} />
-# # #               <span>{user?.email}</span>
-# # #             </div>
-# # #             <button className="logout-btn" onClick={handleLogout}>
-# # #               <LogOut size={18} />
-# # #               Logout
-# # #             </button>
-# # #           </div>
-# # #         </div>
+import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
 
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST'),
+    'port': os.getenv('DB_PORT'),
+    'database': os.getenv('DB_NAME'),
+    'user': os.getenv('DB_USER'),
+    'password': os.getenv('DB_PASSWORD')
+}
 
-# # #         // abc@gmail.com
-# # #         // P@ssw0rd */}
-
-
-# # import requests
-
-# # url = "http://127.0.0.1:8080/api/analyze"
-
-# # headers = {
-# #     "Authorization": "Bearer YOUR_REAL_JWT_TOKEN",
-# #     "Content-Type": "application/json"
-# # }
-
-# # payload = {
-# #     "symbol": "AAPL"
-# # }
-
-# # response = requests.post(url, json=payload, headers=headers)
-
-# # print("Status:", response.status_code)
-# # print("Body:", response.text)
-
-# # import jwt
-
-# # JWT_SECRET = "your_secret_key_here"
-
-# # token = jwt.encode(
-# #     {"user_id": 1},
-# #     JWT_SECRET,
-# #     algorithm="HS256"
-# # )
-
-# # print(token)
-
-# import requests
-
-# import jwt
-
-# JWT_SECRET = "your-super-secret-key-change-this-in-production"
-
-# token = jwt.encode({"user_id": 1}, JWT_SECRET, algorithm="HS256")
-# print(token)
-
-# url = "http://127.0.0.1:8080/api/analyze"
-
-# headers = {
-#     "Authorization": token,
-#     "Content-Type": "application/json"
-# }
-
-
-# payload = {
-#     "symbol": "SYPNL",
-#     "rsi_period": 14
-# }
-
-# response = requests.post(url, json=payload, headers=headers)
-
-# print("Status:", response.status_code)
-# print("Body:", response.text)
-
+try:
+    # Connect to Supabase Postgres
+    conn = psycopg2.connect(
+        host=DB_CONFIG['host'],
+        port=DB_CONFIG['port'],
+        database=DB_CONFIG['database'],
+        user=DB_CONFIG['user'],
+        password=DB_CONFIG['password'],
+        cursor_factory=RealDictCursor
+    )
+    cursor = conn.cursor()
+    cursor.execute("SELECT NOW() as current_time;")
+    result = cursor.fetchone()
+    print("✅ Connection successful! Current DB time:", result['current_time'])
+    cursor.close()
+    conn.close()
+except Exception as e:
+    print("❌ Connection failed:", e)

@@ -41,7 +41,8 @@ DB_CONFIG = {
     'port': os.getenv('DB_PORT', '5432'),
     'database': os.getenv('DB_NAME', 'trading_db'),
     'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', 'your_password_here')
+    'password': os.getenv('DB_PASSWORD', 'your_password_here'),
+    'sslmode': 'require'
 }
 
 connection_pool = None

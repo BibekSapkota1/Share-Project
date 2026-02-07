@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { TrendingUp, TrendingDown, Activity, Settings, Bell, AlertCircle, Database, Search, BarChart3, History, LogOut, User, X, AlertTriangle } from 'lucide-react';
 
-// const API_URL = 'http://localhost:8080/api';
+//const API_URL = 'http://localhost:8080/api';
 
-const API_URL = 'https://analysisproject.onrender.com';
+const API_URL = 'https://analysisproject.onrender.com/api';
 
 function App() {
   // Auth state
@@ -57,11 +57,31 @@ function App() {
     }
   }, [isAuthenticated]);
 
+  // const verifyToken = async (token) => {
+  //   try {
+  //     const response = await fetch(`${API_URL}/auth/verify`, {
+  //       headers: { 'Authorization': token }
+  //     });
+  //     if (response.ok) {
+  //       const data = await response.json();
+  //       setUser(data.user);
+  //       setIsAuthenticated(true);
+  //     } else {
+  //       localStorage.removeItem('token');
+  //     }
+  //   } catch (error) {
+  //     localStorage.removeItem('token');
+  //   }
+  // };
+
   const verifyToken = async (token) => {
     try {
       const response = await fetch(`${API_URL}/auth/verify`, {
-        headers: { 'Authorization': token }
+        headers: { 
+          'Authorization': `Bearer ${token}` // <-- Add "Bearer "
+        }
       });
+  
       if (response.ok) {
         const data = await response.json();
         setUser(data.user);
@@ -73,6 +93,7 @@ function App() {
       localStorage.removeItem('token');
     }
   };
+  
 
   const handleAuth = async (e) => {
     e.preventDefault();
