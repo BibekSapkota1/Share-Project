@@ -1,55 +1,86 @@
 const API_URL = 'http://localhost:8080/api';
+//const API_URL = 'https://analysisproject.onrender.com/api';
 
-// ── helpers ─────────────────────────────────────────────────────────────────
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': localStorage.getItem('token') || ''
+});
 
-export const getAuthHeaders = () => {
-  const token = localStorage.getItem('token');
-  return {
-    'Content-Type': 'application/json',
-    Authorization: token || '',
-  };
+// ────────────────────────────────────────────────────────────────────────────
+// Auth APIs
+// ────────────────────────────────────────────────────────────────────────────
+export const verifyTokenAPI = (token) => {
+  return fetch(`${API_URL}/auth/verify`, {
+    headers: { 'Authorization': token }
+  });
 };
 
-// ── auth ────────────────────────────────────────────────────────────────────
-
-export const verifyTokenAPI = (token) =>
-  fetch(`${API_URL}/auth/verify`, { headers: { Authorization: token } });
-
-export const authRequest = (mode, email, password) =>
-  fetch(`${API_URL}/auth/${mode === 'login' ? 'login' : 'signup'}`, {
+export const loginAPI = (email, password) => {
+  return fetch(`${API_URL}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password })
   });
+};
 
-// ── symbols & scanner ───────────────────────────────────────────────────────
+export const signupAPI = (email, password) => {
+  return fetch(`${API_URL}/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+};
 
-export const fetchSymbolsAPI = () => fetch(`${API_URL}/symbols`);
+// ────────────────────────────────────────────────────────────────────────────
+// Data Fetching APIs
+// ────────────────────────────────────────────────────────────────────────────
+export const fetchSymbolsAPI = () => {
+  return fetch(`${API_URL}/symbols`);
+};
 
-export const fetchScannerAPI = () =>
-  fetch(`${API_URL}/scanner`, { headers: getAuthHeaders() });
+export const fetchScannerAPI = () => {
+  return fetch(`${API_URL}/scanner`, { 
+    headers: getAuthHeaders() 
+  });
+};
 
-// ── analysis ────────────────────────────────────────────────────────────────
+export const fetchCyclesAPI = (symbol = null) => {
+  const url = symbol ? `${API_URL}/cycles/${symbol}` : `${API_URL}/cycles`;
+  return fetch(url, { 
+    headers: getAuthHeaders() 
+  });
+};
 
-export const analyzeAPI = (symbol, rsiPeriod, upperThreshold, lowerThreshold) =>
-  fetch(`${API_URL}/analyze`, {
+export const analyzeDataAPI = (symbol, rsiPeriod, upperThreshold, lowerThreshold) => {
+  return fetch(`${API_URL}/analyze`, {
     method: 'POST',
     headers: getAuthHeaders(),
-    body: JSON.stringify({ symbol, rsi_period: rsiPeriod, upper_threshold: upperThreshold, lower_threshold: lowerThreshold }),
+    body: JSON.stringify({
+      symbol,
+      rsi_period: rsiPeriod,
+      upper_threshold: upperThreshold,
+      lower_threshold: lowerThreshold
+    })
   });
+};
 
-// ── cycles ──────────────────────────────────────────────────────────────────
-
-export const fetchCyclesAPI = (symbol = null) =>
-  fetch(symbol ? `${API_URL}/cycles/${symbol}` : `${API_URL}/cycles`, {
-    headers: getAuthHeaders(),
-  });
-
-// ── trade ───────────────────────────────────────────────────────────────────
-
-export const executeTradeAPI = (symbol, action, date, price, rsi) =>
-  fetch(`${API_URL}/trade`, {
+// ────────────────────────────────────────────────────────────────────────────
+// Trade Execution APIs
+// ────────────────────────────────────────────────────────────────────────────
+export const executeTradeAPI = (symbol, action, date, price, rsi) => {
+  return fetch(`${API_URL}/trade`, {
     method: 'POST',
     headers: getAuthHeaders(),
-    body: JSON.stringify({ symbol, action, date, price, rsi }),
+    body: JSON.stringify({ symbol, action, date, price, rsi })
   });
+};
+
+export const executeManualSellAPI = (symbol, date, price, rsi, reason) => {
+  return fetch(`${API_URL}/trade/manual-sell`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ symbol, date, price, rsi, reason })
+  });
+};
+
+export { API_URL };
