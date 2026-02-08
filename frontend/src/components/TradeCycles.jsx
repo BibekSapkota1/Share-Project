@@ -1,9 +1,44 @@
-import React from 'react';
-import { History } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { History, Eye } from 'lucide-react';
+import CycleDetailsModal from '../Modal/CycleDetailsModal';
 
 export default function TradeCycles({ allCycles, cyclesLoading, fetchCycles }) {
+  const [selectedCycle, setSelectedCycle] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+
+  // Sort cycles: OPEN first, then by latest (created_at or id descending)
+  const sortedCycles = useMemo(() => {
+    return [...allCycles].sort((a, b) => {
+      // First, sort by status (OPEN first)
+      if (a.status === 'OPEN' && b.status !== 'OPEN') return -1;
+      if (a.status !== 'OPEN' && b.status === 'OPEN') return 1;
+      
+      // Then sort by created_at (latest first)
+      const dateA = new Date(a.created_at);
+      const dateB = new Date(b.created_at);
+      return dateB - dateA;
+    });
+  }, [allCycles]);
+
+  const openCycleDetails = (cycle) => {
+    setSelectedCycle(cycle);
+    setShowModal(true);
+  };
+
+  const closeCycleDetails = () => {
+    setShowModal(false);
+    setSelectedCycle(null);
+  };
+
   return (
     <div className="cycles-page">
+      {showModal && selectedCycle && (
+        <CycleDetailsModal 
+          cycle={selectedCycle}
+          onClose={closeCycleDetails}
+        />
+      )}
+
       <div className="cycles-header">
         <h2 className="page-title">
           <History size={32} />
@@ -19,7 +54,7 @@ export default function TradeCycles({ allCycles, cyclesLoading, fetchCycles }) {
       </div>
 
       <div className="cycles-container">
-        {allCycles.length > 0 ? (
+        {sortedCycles.length > 0 ? (
           <div className="cycles-table-wrapper">
             <table className="cycles-table">
               <thead>
@@ -34,10 +69,11 @@ export default function TradeCycles({ allCycles, cyclesLoading, fetchCycles }) {
                   <th>P/L</th>
                   <th>P/L %</th>
                   <th>Sell Reason</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {allCycles.map((cycle) => (
+                {sortedCycles.map((cycle) => (
                   <tr key={cycle.id} className={cycle.status === 'OPEN' ? 'open-cycle' : ''}>
                     <td>#{cycle.cycle_number}</td>
                     <td><strong>{cycle.symbol}</strong></td>
@@ -68,6 +104,16 @@ export default function TradeCycles({ allCycles, cyclesLoading, fetchCycles }) {
                           {cycle.sell_reason}
                         </span>
                       )}
+                    </td>
+                    <td>
+                      <button 
+                        className="view-details-btn"
+                        onClick={() => openCycleDetails(cycle)}
+                        title="View Details"
+                      >
+                        <Eye size={18} />
+                        Details
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -149,6 +195,7 @@ export default function TradeCycles({ allCycles, cyclesLoading, fetchCycles }) {
           text-transform: uppercase;
           letter-spacing: 0.05em;
           border-bottom: 2px solid #1e293b;
+          white-space: nowrap;
         }
 
         .cycles-table td {
@@ -210,6 +257,27 @@ export default function TradeCycles({ allCycles, cyclesLoading, fetchCycles }) {
         .reason-badge.manual {
           background: rgba(239, 68, 68, 0.2);
           color: #ef4444;
+        }
+
+        .view-details-btn {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem 1rem;
+          background: linear-gradient(135deg, #3b82f6, #2563eb);
+          color: white;
+          border: none;
+          border-radius: 6px;
+          font-size: 0.875rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+          white-space: nowrap;
+        }
+
+        .view-details-btn:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
         }
 
         .empty-state {

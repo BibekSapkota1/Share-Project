@@ -1,37 +1,3 @@
-# @app.route('/api/auth/signup', methods=['POST'])
-# def signup():
-#     """Create new user account"""
-#     data = request.json
-#     email = data.get('email')
-#     password = data.get('password')
-    
-#     # Validate
-#     if not email or not password:
-#         return jsonify({'error': 'Email and password required'}), 400
-    
-#     # Check if user exists
-#     # Hash password
-#     # Create user
-#     # Return token
-
-# @app.route('/api/auth/login', methods=['POST'])
-# def login():
-#     """Login user"""
-#     data = request.json
-#     email = data.get('email')
-#     password = data.get('password')
-    
-#     # Find user
-#     # Verify password
-#     # Update last_login
-#     # Return token
-
-# @app.route('/api/auth/verify', methods=['GET'])
-# def verify():
-#     """Verify token is valid"""
-#     token = request.headers.get('Authorization')
-#     # Verify and return user info
-
 
 """
 server_auth.py  –  Auth route implementations (reference / Blueprint-ready)

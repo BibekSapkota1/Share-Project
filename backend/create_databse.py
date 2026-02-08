@@ -1,8 +1,8 @@
+
 # """
 # Database Creation and Initialization Script
 # Run this separately to create/update database schema
 # """
-# all okay
 
 # import psycopg2
 # from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
@@ -328,8 +328,13 @@
 
 
 """
-Database Creation and Initialization Script
+Database Creation and Initialization Script - v10.0
 Run this separately to create/update database schema
+
+PORTFOLIO LIMITS:
+- Total: 10 open positions max (across all sectors)
+- Others sector: 4 positions max
+- All other sectors: 3 positions max each
 """
 
 import psycopg2
@@ -344,7 +349,7 @@ DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
     'port': os.getenv('DB_PORT', '5432'),
     'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', 'your_password_here')
+    'password': os.getenv('DB_PASSWORD', '123')
 }
 
 DB_NAME = os.getenv('DB_NAME', 'trading_db')
@@ -390,32 +395,47 @@ def create_tables():
                 id SERIAL PRIMARY KEY,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
+                is_admin BOOLEAN DEFAULT FALSE,
+                is_active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_login TIMESTAMP,
-                is_active BOOLEAN DEFAULT TRUE
+                last_login TIMESTAMP
             )
         ''')
         print("✅ Users table created")
         
-        # 2. Trade cycles table (with user_id)
+        # 2. Sectors table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sectors (
+                id SERIAL PRIMARY KEY,
+                sector_name VARCHAR(100) NOT NULL,
+                symbol VARCHAR(20) NOT NULL,
+                max_positions INTEGER NOT NULL DEFAULT 3,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(symbol)
+            )
+        ''')
+        print("✅ Sectors table created")
+        
+        # 3. Trade cycles table (with user_id and sector)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS trade_cycles (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 symbol VARCHAR(50) NOT NULL,
+                sector VARCHAR(100),
                 cycle_number INTEGER NOT NULL,
                 status VARCHAR(20) NOT NULL CHECK (status IN ('OPEN', 'CLOSED')),
                 buy_date DATE NOT NULL,
-                buy_price DECIMAL(15, 2) NOT NULL,
+                buy_price DECIMAL(15, 4) NOT NULL,
                 buy_rsi DECIMAL(5, 2) NOT NULL,
                 sell_date DATE,
-                sell_price DECIMAL(15, 2),
+                sell_price DECIMAL(15, 4),
                 sell_rsi DECIMAL(5, 2),
-                highest_price_after_buy DECIMAL(15, 2) NOT NULL,
-                tsl_trigger_price DECIMAL(15, 2),
-                profit_loss DECIMAL(15, 2),
-                profit_loss_percent DECIMAL(8, 2),
-                sell_reason VARCHAR(50),
+                highest_price_after_buy DECIMAL(15, 4) NOT NULL,
+                tsl_trigger_price DECIMAL(15, 4),
+                profit_loss DECIMAL(15, 4),
+                profit_loss_percent DECIMAL(8, 4),
+                sell_reason VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -424,28 +444,28 @@ def create_tables():
         ''')
         print("✅ Trade cycles table created")
         
-        # 3. Price tracking table
+        # 4. Price tracking table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS price_tracking (
                 id SERIAL PRIMARY KEY,
                 cycle_id INTEGER NOT NULL,
                 date DATE NOT NULL,
-                close_price DECIMAL(15, 2) NOT NULL,
+                close_price DECIMAL(15, 4) NOT NULL,
                 is_new_high BOOLEAN DEFAULT FALSE,
-                tsl_price DECIMAL(15, 2) NOT NULL,
+                tsl_price DECIMAL(15, 4) NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (cycle_id) REFERENCES trade_cycles(id) ON DELETE CASCADE
             )
         ''')
         print("✅ Price tracking table created")
         
-        # 4. User settings table
+        # 5. User settings table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_settings (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
-                key VARCHAR(50) NOT NULL,
-                value VARCHAR(100) NOT NULL,
+                key VARCHAR(100) NOT NULL,
+                value VARCHAR(255) NOT NULL,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 UNIQUE(user_id, key)
@@ -453,11 +473,13 @@ def create_tables():
         ''')
         print("✅ User settings table created")
         
-        # 5. Global settings table
+        # 6. Global settings table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS global_settings (
-                key VARCHAR(50) PRIMARY KEY,
-                value VARCHAR(100) NOT NULL,
+                id SERIAL PRIMARY KEY,
+                key VARCHAR(100) UNIQUE NOT NULL,
+                value VARCHAR(255) NOT NULL,
+                description TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -465,12 +487,18 @@ def create_tables():
         
         # Insert default global settings
         cursor.execute('''
-            INSERT INTO global_settings (key, value) 
+            INSERT INTO global_settings (key, value, description) 
             VALUES 
-                ('default_rsi_period', '14'),
-                ('default_upper_threshold', '70'),
-                ('default_lower_threshold', '30'),
-                ('default_tsl_percent', '5')
+                ('default_rsi_period', '14', 'Default RSI calculation period'),
+                ('default_upper_threshold', '70', 'Default RSI upper threshold for buy signals'),
+                ('default_lower_threshold', '30', 'Default RSI lower threshold for sell signals'),
+                ('top_turnover_count', '15', 'Number of top turnover stocks for buy eligibility'),
+                ('top_turnover_days', '2', 'Number of consecutive days in top turnover required'),
+                ('sell_turnover_threshold', '12', 'If symbol falls below this turnover rank, trigger sell'),
+                ('tsl_percentage', '5', 'Trailing stop loss percentage (5 = 95% of highest)'),
+                ('max_total_positions', '10', 'Maximum total open positions across all sectors per user'),
+                ('max_others_sector_positions', '4', 'Maximum positions in Others sector'),
+                ('max_default_sector_positions', '3', 'Maximum positions in each sector (default)')
             ON CONFLICT (key) DO NOTHING
         ''')
         print("✅ Default settings inserted")
@@ -478,42 +506,90 @@ def create_tables():
         # Create indexes for better performance
         print("\n🔍 Creating indexes...")
         
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_users_email 
-            ON users(email)
-        ''')
-        
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_trade_cycles_user_id 
-            ON trade_cycles(user_id)
-        ''')
-        
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_trade_cycles_symbol 
-            ON trade_cycles(symbol)
-        ''')
-        
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_trade_cycles_status 
-            ON trade_cycles(status)
-        ''')
-        
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_trade_cycles_user_symbol 
-            ON trade_cycles(user_id, symbol)
-        ''')
-        
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_price_tracking_cycle_id 
-            ON price_tracking(cycle_id)
-        ''')
-        
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_user_settings_user_id 
-            ON user_settings(user_id)
-        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sectors_symbol ON sectors(symbol)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sectors_sector_name ON sectors(sector_name)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_cycles_user_id ON trade_cycles(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_cycles_symbol ON trade_cycles(symbol)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_cycles_status ON trade_cycles(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_cycles_sector ON trade_cycles(sector)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_cycles_user_symbol ON trade_cycles(user_id, symbol)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_cycles_user_status ON trade_cycles(user_id, status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_price_tracking_cycle_id ON price_tracking(cycle_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id)')
         
         print("✅ Indexes created")
+        
+        # Create helper views
+        print("\n📊 Creating views...")
+        
+        cursor.execute('''
+            CREATE OR REPLACE VIEW v_sector_positions AS
+            SELECT 
+                tc.user_id,
+                tc.sector,
+                s.max_positions,
+                COUNT(*) as current_positions,
+                s.max_positions - COUNT(*) as available_positions
+            FROM trade_cycles tc
+            JOIN sectors s ON tc.symbol = s.symbol
+            WHERE tc.status = 'OPEN'
+            GROUP BY tc.user_id, tc.sector, s.max_positions
+        ''')
+        
+        cursor.execute('''
+            CREATE OR REPLACE VIEW v_user_portfolio AS
+            SELECT 
+                tc.user_id,
+                u.email,
+                COUNT(*) FILTER (WHERE tc.status = 'OPEN') as open_positions,
+                COUNT(*) FILTER (WHERE tc.status = 'CLOSED') as closed_positions,
+                SUM(tc.profit_loss) FILTER (WHERE tc.status = 'CLOSED') as total_pnl,
+                AVG(tc.profit_loss_percent) FILTER (WHERE tc.status = 'CLOSED') as avg_pnl_percent,
+                COUNT(DISTINCT tc.sector) FILTER (WHERE tc.status = 'OPEN') as sectors_active
+            FROM trade_cycles tc
+            JOIN users u ON tc.user_id = u.id
+            GROUP BY tc.user_id, u.email
+        ''')
+        
+        cursor.execute('''
+            CREATE OR REPLACE VIEW v_sector_performance AS
+            SELECT 
+                tc.sector,
+                COUNT(*) as total_trades,
+                COUNT(*) FILTER (WHERE tc.status = 'OPEN') as open_trades,
+                COUNT(*) FILTER (WHERE tc.status = 'CLOSED') as closed_trades,
+                AVG(tc.profit_loss) FILTER (WHERE tc.status = 'CLOSED') as avg_pnl,
+                AVG(tc.profit_loss_percent) FILTER (WHERE tc.status = 'CLOSED') as avg_pnl_percent,
+                SUM(tc.profit_loss) FILTER (WHERE tc.status = 'CLOSED') as total_pnl
+            FROM trade_cycles tc
+            GROUP BY tc.sector
+            ORDER BY total_pnl DESC NULLS LAST
+        ''')
+        
+        print("✅ Views created")
+        
+        # Create helper functions
+        print("\n⚙️  Creating functions...")
+        
+        cursor.execute('''
+            CREATE OR REPLACE FUNCTION get_total_open_positions(p_user_id INTEGER)
+            RETURNS INTEGER AS $$
+            DECLARE
+                v_count INTEGER;
+            BEGIN
+                SELECT COUNT(*)
+                INTO v_count
+                FROM trade_cycles
+                WHERE user_id = p_user_id AND status = 'OPEN';
+                
+                RETURN COALESCE(v_count, 0);
+            END;
+            $$ LANGUAGE plpgsql;
+        ''')
+        
+        print("✅ Functions created")
         
         # Commit changes
         conn.commit()
@@ -521,6 +597,11 @@ def create_tables():
         conn.close()
         
         print("\n✅ All tables created successfully!")
+        print("\n📋 Portfolio Limits:")
+        print("  • Total: 10 open positions (across all sectors)")
+        print("  • Others sector: 4 positions max")
+        print("  • All other sectors: 3 positions max each")
+        
         return True
         
     except Exception as e:
@@ -537,8 +618,15 @@ def drop_all_tables():
         
         print("\n⚠️  WARNING: Dropping all tables...")
         
+        cursor.execute('DROP VIEW IF EXISTS v_sector_performance CASCADE')
+        cursor.execute('DROP VIEW IF EXISTS v_user_portfolio CASCADE')
+        cursor.execute('DROP VIEW IF EXISTS v_sector_positions CASCADE')
+        cursor.execute('DROP FUNCTION IF EXISTS get_total_open_positions(INTEGER) CASCADE')
+        cursor.execute('DROP FUNCTION IF EXISTS can_buy_in_sector(INTEGER, VARCHAR) CASCADE')
+        cursor.execute('DROP FUNCTION IF EXISTS get_sector_info(VARCHAR) CASCADE')
         cursor.execute('DROP TABLE IF EXISTS price_tracking CASCADE')
         cursor.execute('DROP TABLE IF EXISTS trade_cycles CASCADE')
+        cursor.execute('DROP TABLE IF EXISTS sectors CASCADE')
         cursor.execute('DROP TABLE IF EXISTS user_settings CASCADE')
         cursor.execute('DROP TABLE IF EXISTS global_settings CASCADE')
         cursor.execute('DROP TABLE IF EXISTS users CASCADE')
@@ -577,7 +665,7 @@ def show_table_info():
         cursor.execute('''
             SELECT table_name 
             FROM information_schema.tables 
-            WHERE table_schema = 'public'
+            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
             ORDER BY table_name
         ''')
         
@@ -591,6 +679,27 @@ def show_table_info():
             count = cursor.fetchone()[0]
             print(f"    Records: {count}")
         
+        # Show global settings
+        print("\n⚙️  Global Settings:")
+        cursor.execute('SELECT key, value, description FROM global_settings ORDER BY key')
+        settings = cursor.fetchall()
+        for key, value, desc in settings:
+            print(f"  • {key}: {value}")
+            if desc:
+                print(f"    └─ {desc}")
+        
+        # Show views
+        print("\n👁️  Views:")
+        cursor.execute('''
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public' AND table_type = 'VIEW'
+            ORDER BY table_name
+        ''')
+        views = cursor.fetchall()
+        for view in views:
+            print(f"  • {view[0]}")
+        
         cursor.close()
         conn.close()
         
@@ -600,14 +709,19 @@ def show_table_info():
 def main():
     """Main execution"""
     print("\n" + "="*80)
-    print("🗄️  DATABASE INITIALIZATION SCRIPT")
+    print("🗄️  DATABASE INITIALIZATION SCRIPT - v10.0")
     print("="*80)
     
-    print(f"\nConfiguration:")
+    print(f"\n📝 Configuration:")
     print(f"  Host: {DB_CONFIG['host']}")
     print(f"  Port: {DB_CONFIG['port']}")
     print(f"  Database: {DB_NAME}")
     print(f"  User: {DB_CONFIG['user']}")
+    
+    print(f"\n🎯 Portfolio Limits:")
+    print(f"  • Total: 10 open positions (across all sectors)")
+    print(f"  • Others sector: 4 positions max")
+    print(f"  • All other sectors: 3 positions max each")
     
     print("\n" + "="*80)
     print("OPTIONS:")

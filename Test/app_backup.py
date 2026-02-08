@@ -963,8 +963,8 @@ def check_turnover_eligibility(symbol, date_str):
                 break
         if current_date_idx is None or current_date_idx < 2:
             return False
-        day_1 = unique_dates[current_date_idx - 1]
-        day_2 = unique_dates[current_date_idx - 2]
+        day_1 = unique_dates[current_date_idx ]
+        day_2 = unique_dates[current_date_idx - 1]
         top_day_1 = get_top_turnover_symbols(df, day_1, 15)
         top_day_2 = get_top_turnover_symbols(df, day_2, 15)
         return symbol in top_day_1 and symbol in top_day_2
